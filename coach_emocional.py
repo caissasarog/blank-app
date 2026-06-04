@@ -45,6 +45,28 @@ def resumir_historial(historial, limite=6):
     return "\n".join(partes) if partes else "Sin historial reciente."
 
 
+def detectar_estilo_usuario(historial):
+    textos = [
+        str(item.get("content", ""))
+        for item in (historial or [])
+        if isinstance(item, dict) and item.get("role") == "user"
+    ]
+    unido = " ".join(textos[-10:]).lower()
+    if not unido.strip():
+        return "Aún no hay estilo claro; responde con calidez natural."
+
+    rasgos = []
+    if any(p in unido for p in ["jaja", "okok", "tipo", "osea", "sabes", "porfis"]):
+        rasgos.append("usa tono casual y cercano")
+    if any(p in unido for p in ["no entiendo", "me da miedo", "me preocupa", "ansiedad"]):
+        rasgos.append("necesita calma, claridad y pasos suaves")
+    if len(unido) < 220:
+        rasgos.append("probablemente prefiere respuestas no muy largas")
+    if any(p in unido for p in ["paso a paso", "lento"]):
+        rasgos.append("le ayudan explicaciones paso a paso")
+    return ", ".join(rasgos) if rasgos else "responde como una persona cercana, clara y presente"
+
+
 def detectar_alerta_nutricion(texto):
     t = texto.lower()
     frases = [
@@ -70,8 +92,9 @@ def detectar_alerta_nutricion(texto):
 
 def construir_system_prompt(nombre_usuario):
     return f"""
-Eres un coach emocional muy humano, cálido y natural.
-Hablas en español cercano y real, no robótico.
+Eres Coach, el acompañante emocional de Nutribot.
+Tu personalidad es más humana, cálida y conversacional que Nuti.
+Hablas como alguien que escucha y acompaña por mensaje, no como asistente técnico.
 Cuida mucho la ortografía, acentos y puntuación.
 No mezcles palabras en inglés. Si una idea aparece en inglés, tradúcela a español natural.
 Tu estilo:
@@ -82,7 +105,7 @@ Tu estilo:
 - Habla como alguien presente, atento y amable.
 - No diagnostiques.
 - Puedes hacer preguntas suaves para entender mejor.
-- Responde breve a media longitud.
+- Responde breve a media longitud; prioriza validar, acompañar y dar un siguiente paso pequeño.
 Usuario actual: {nombre_usuario}
 Si notas ansiedad relacionada con comida, acompaña emocionalmente y deja espacio para que luego Nuti ayude con la parte de nutrición.
 """.strip()
@@ -140,19 +163,23 @@ def coach_emocional_inteligente(pregunta, historial):
 
     historial_guardado = memoria[usuario]["historial"]
     historial_texto = resumir_historial(historial)
+    estilo = detectar_estilo_usuario(historial)
 
     system_prompt = construir_system_prompt(usuario)
     user_prompt = f"""
 Historial reciente:
 {historial_texto}
+Estilo del usuario detectado:
+{estilo}
 Mensaje actual del usuario:
 {pregunta}
 Responde directamente al usuario.
 Usa español correcto, natural y con buena ortografía. Evita mezclar inglés.
+Adapta tu tono al estilo del usuario y mantén una sensación de conversación real.
 """.strip()
 
     try:
-        client = InferenceClient(provider="auto", token=hf_token)
+        client = InferenceClient(provider="auto", token=hf_token, timeout=25)
         completion = client.chat.completions.create(
             model=MODEL_ID,
             messages=[
@@ -180,10 +207,10 @@ Usa español correcto, natural y con buena ortografía. Evita mezclar inglés.
         guardar_json(MEMORIA_EMOCIONAL_FILE, memoria)
 
         return respuesta
-    except Exception as e:
+    except Exception:
+        respuesta = respuesta_basica_coach(pregunta)
         return (
-            "No pude conectar con la IA completa en este momento. "
-            "Revisa que el token HF_TOKEN exista y tenga permiso de Inference Providers.\n\n"
-            f"Detalle técnico: {str(e)}"
+            f"{respuesta}\n\n"
+            "Estoy usando una respuesta básica por ahora, pero sigo contigo. Intenta de nuevo en unos segundos si quieres una respuesta más profunda."
         )
 

@@ -60,6 +60,30 @@ def resumir_historial(historial, limite=6):
     return "\n".join(partes) if partes else "Sin historial reciente."
 
 
+def detectar_estilo_usuario(historial):
+    textos = [
+        str(item.get("content", ""))
+        for item in (historial or [])
+        if isinstance(item, dict) and item.get("role") == "user"
+    ]
+    unido = " ".join(textos[-8:]).lower()
+    if not unido.strip():
+        return "Aún no hay estilo claro; responde natural y fácil de entender."
+
+    rasgos = []
+    if len(unido) < 180:
+        rasgos.append("prefiere respuestas cortas")
+    if any(p in unido for p in ["osea", "tipo", "sabes", "porfis", "jaja", "okok"]):
+        rasgos.append("habla casual y cercana")
+    if any(p in unido for p in ["paso a paso", "no entiendo", "lento"]):
+        rasgos.append("le ayudan instrucciones paso a paso")
+    if any(p in unido for p in ["rápido", "rapido", "directo"]):
+        rasgos.append("quiere respuestas directas")
+    if any(p in unido for p in ["calor", "prote", "kcal", "nutrientes"]):
+        rasgos.append("le importan datos concretos de nutrición")
+    return ", ".join(rasgos) if rasgos else "responde con tono cercano, claro y práctico"
+
+
 def construir_system_prompt(perfil, alerta_emocional):
     extra_emocional = ""
     if alerta_emocional and alerta_emocional.get("tipo") == "ansiedad_comida":
@@ -70,19 +94,20 @@ def construir_system_prompt(perfil, alerta_emocional):
         )
 
     return f"""
-Eres Nuti, una asistente de nutrición muy inteligente, natural y útil.
-Hablas en español claro, cercano y nada robótico.
+Eres Nuti, la asistente nutricional de Nutribot.
+Tu personalidad es directa, clara, útil y profesional, como una asistente experta que responde por mensaje.
+No eres coach emocional; si la persona necesita contención emocional, puedes ser amable pero enfocas la respuesta en nutrición práctica.
 Cuida mucho la ortografía, acentos y puntuación.
 No mezcles palabras en inglés. Nunca uses palabras como "started", "healthy" o "tips" si puedes decirlo en español.
 Antes de responder, revisa que la frase suene natural en español mexicano.
 Tu trabajo:
-- Si el usuario solo saluda o quiere conversación casual, síguele el rollo con naturalidad.
-- Si pregunta sobre nutrición, responde como experta pero fácil de entender.
+- Si el usuario solo saluda, responde breve y pregunta qué necesita.
+- Si pregunta sobre nutrición, responde con una recomendación concreta y accionable.
 - Usa el perfil del usuario para personalizar.
 - No inventes diagnósticos médicos.
-- No respondas con listas rígidas a menos que ayuden.
-- No uses frases genéricas tipo "sé fuerte" o "todo estará bien" si no vienen al caso.
-- Responde breve a media longitud, útil y humana.
+- Usa listas cortas cuando ayuden a organizar opciones, porciones o pasos.
+- Cuando recomiendes comida, incluye 2 o 3 opciones, porciones y aproximado si conviene.
+- Responde breve a media longitud; evita rollos largos.
 Perfil del usuario:
 - Nombre: {perfil['nombre']}
 - Edad: {perfil['edad']}
@@ -160,33 +185,37 @@ def buscar_respuesta(mensaje, historial):
 
     system_prompt = construir_system_prompt(perfil, alerta_emocional)
     historial_texto = resumir_historial(historial)
+    estilo = detectar_estilo_usuario(historial)
 
     user_prompt = f"""
 Historial reciente:
 {historial_texto}
+Estilo del usuario detectado:
+{estilo}
 Mensaje actual del usuario:
 {mensaje}
 Responde directamente al usuario.
 Usa español correcto, natural y con buena ortografía. Evita mezclar inglés.
+Adapta el tono al estilo del usuario, pero mantente como asistente nutricional: clara, práctica y directa.
 """.strip()
 
     try:
-        client = InferenceClient(provider="auto", token=hf_token)
+        client = InferenceClient(provider="auto", token=hf_token, timeout=25)
         completion = client.chat.completions.create(
             model=MODEL_ID,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.6,
+            temperature=0.48,
             max_tokens=220,
         )
         respuesta = completion.choices[0].message.content.strip()
         return respuesta if respuesta else "No pude generar respuesta ahorita."
-    except Exception as e:
+    except Exception:
+        respuesta = respuesta_basica_nuti(mensaje, perfil)
         return (
-            "No pude conectar con la IA completa en este momento. "
-            "Revisa que el token HF_TOKEN exista y tenga permiso de Inference Providers.\n\n"
-            f"Detalle técnico: {str(e)}"
+            f"{respuesta}\n\n"
+            "Estoy usando una respuesta básica por ahora; intenta de nuevo en unos segundos para una recomendación más completa."
         )
 
